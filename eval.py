@@ -340,11 +340,17 @@ def main():
     all_scores = {}
     vendi_scores = {}
     for i, path in enumerate(args.path[1:]):
-
+        print("Generated data representations")
+        # Saves baseline representations for multiple evals
+        if len(args.path) == 3 and i==2:
+            outdir = args.load_dir
+        else:
+            outdir = args.output_dir
+            
         dataloaderi = get_dataloader_from_path(path, model.transform, num_workers, args,
                                                sample_w_replacement=True if ':train' in path else False)
-        print("Generated data representations")
-        repsi = compute_representations(dataloaderi, model, device, args)
+        
+        repsi = compute_representations(dataloaderi, model, device, args, dir_path=outdir)
         reps = [reps_real, repsi]
 
         print(f'Computing scores between reference dataset and {path}\n', file=sys.stderr)
@@ -369,9 +375,12 @@ def main():
                                perturbation=args.heatmaps_perturbation, random_seed=args.seed)
     # save scores from all generated paths
     save_scores(all_scores, args, vendi_scores=vendi_scores)
-    pd.DataFrame.from_dict(data=all_scores).to_csv(os.path.join(args.output_dir, 'scores.csv'))
-    pd.DataFrame.from_dict(data=all_scores).T.to_csv(os.path.join(args.output_dir, 'transp_scores.csv'))
-
-
+    df = pd.DataFrame.from_dict(data=all_scores)
+   
+    if len(args.path) == 3:
+        # calculate difference betwwen the first and second column on pandas
+        df['Gain'] = df.iloc[:, 0] - df.iloc[:, 1]
+    
+    df.round(2).to_csv(os.path.join(args.output_dir, 'scores.csv'))
 if __name__ == '__main__':
     main()
