@@ -68,6 +68,8 @@ parser.add_argument('--output_dir', type=str, default='./experiment/default-test
                     help='Directory to save outputs in')
 parser.add_argument('--load_dir', type=str, default='./experiment/default-test',
                     help='Directory to save outputs in')
+parser.add_argument('--exp_name', type=str, default='exp_00',
+                    help='Directory to save outputs in')
 
 parser.add_argument('--save', action='store_true',
                     help='Save representations to output_dir', default=True)
@@ -342,10 +344,14 @@ def main():
     for i, path in enumerate(args.path[1:]):
         print("Generated data representations")
         # Saves baseline representations for multiple evals
-        if len(args.path) == 3 and i==2:
+        if len(args.path) == 3 and i==1:
             outdir = args.load_dir
+            exp_name = "baseline"
         else:
             outdir = args.output_dir
+            exp_name = args.exp_name
+        
+        print(i, exp_name, outdir,"\n\n\n")
             
         dataloaderi = get_dataloader_from_path(path, model.transform, num_workers, args,
                                                sample_w_replacement=True if ':train' in path else False)
@@ -363,8 +369,8 @@ def main():
             scores_i, args.output_dir, args.model, [args.path[0], path], None, args.nsample,
         )
         if IS_scores is not None:
-            scores_i.update(IS_scores[f'run{i:02d}'])
-        all_scores[f'run{i:02d}'] = scores_i
+            scores_i.update(IS_scores[f'{exp_name}_{i:02d}'])
+        all_scores[f'{exp_name}_{i:02d}'] = scores_i
 
         if args.heatmaps:
             print('Visualizing FD gradient with gradcam\n', file=sys.stderr)
