@@ -4,7 +4,7 @@
 
 # Evaluation of Deep Generative models
 
-The codebase for evaluation of deep generative models as presented in [*Exposing flaws of generative model evaluation metrics and their unfair treatment of diffusion models*](https://arxiv.org/abs/2306.04675).
+The codebase for evaluation of deep generative models as presented in [*Exposing flaws of generative model evaluation metrics and their unfair treatment of diffusion models*](https://arxiv.org/abs/2306.04675), accepted to [NeurIPS 2023](https://neurips.cc/virtual/2023/poster/73076)
 
 We studied 41 generative models across a diverse range of image datasets and found:
 
@@ -194,13 +194,12 @@ If you use any part of this repository in your research, please cite the associa
 Authors: George Stein, Jesse C. Cresswell, Rasa Hosseinzadeh, Yi Sui, Brendan Leigh Ross, Valentin Villecroze, Zhaoyan Liu, Anthony L. Caterini, J. Eric T. Taylor, Gabriel Loaiza-Ganem
 
 ```
-@misc{stein2023exposing,
-      title={Exposing flaws of generative model evaluation metrics and their unfair treatment of diffusion models}, 
-      author={George Stein and Jesse C. Cresswell and Rasa Hosseinzadeh and Yi Sui and Brendan Leigh Ross and Valentin Villecroze and Zhaoyan Liu and Anthony L. Caterini and J. Eric T. Taylor and Gabriel Loaiza-Ganem},
-      year={2023},
-      eprint={2306.04675},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG}
+@inproceedings{stein2023exposing,
+  title={Exposing flaws of generative model evaluation metrics and their unfair treatment of diffusion models},
+  author={Stein, George and Cresswell, Jesse and Hosseinzadeh, Rasa and Sui, Yi and Ross, Brendan and Villecroze, Valentin and Liu, Zhaoyan and Caterini, Anthony L and Taylor, Eric and Loaiza-Ganem, Gabriel},
+  booktitle={Advances in Neural Information Processing Systems},
+  volume={36},
+  year={2023}
 }
 ```
 
