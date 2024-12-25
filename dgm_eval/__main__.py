@@ -146,6 +146,9 @@ def compute_scores(args, reps, test_reps, labels=None):
     if 'fd' in args.metrics:
         print("Computing FD \n", file=sys.stderr)
         scores['fd'] = compute_FD_with_reps(*reps)
+        test_comparison = [reps[1], test_reps]
+        scores['fd_test'] = compute_FD_with_reps(*test_comparison)
+        scores['MMM_fd'] = (scores['fd_test']/(scores['fd'] + scores['fd_test']))/2
 
     if 'fd_eff' in args.metrics:
         print("Computing Efficient FD \n", file=sys.stderr)

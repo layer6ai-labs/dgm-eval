@@ -142,11 +142,19 @@ class DataLoader():
         except:
             raise RuntimeError(f'{self.dataset_name} is not a dataset in torchvision')
 
+        if self.dataset_name == 'LSUN':
+            print(self.train_set) #false
+            classes = 'train' if self.train_set else 'test'
+            self.data_set = torchvision_dataset(root=TORCHVISION_DATA_PATH,
+                                                classes=classes,
+                                                transform=self.transform,
+                                                )
         else:
             self.data_set = torchvision_dataset(root=TORCHVISION_DATA_PATH,
                                                 train=self.train_set,
                                                 transform=self.transform,
                                                 download=True)
+
 
     def subsample_dataset(self):
         """subsample to desired size"""
