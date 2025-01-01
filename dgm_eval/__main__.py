@@ -163,6 +163,12 @@ def compute_scores(args, reps, test_reps, labels=None):
         mmd_values = compute_mmd(*reps)
         scores['kd_value'] = mmd_values.mean()
         scores['kd_variance'] = mmd_values.std()
+        test_comparison = [reps[1], test_reps]
+        mmd_values_test = compute_mmd(*test_comparison)
+        scores['kd_value_test'] = mmd_values_test.mean()
+        scores['kd_variance_test'] = mmd_values_test.std()
+        scores['MMM_kd'] = (scores['kd_value_test'] / (scores['kd_value'] + scores['kd_value_test'])) / 2
+
 
     if 'prdc' in args.metrics:
         print("Computing precision, recall, density, and coverage \n", file=sys.stderr)
