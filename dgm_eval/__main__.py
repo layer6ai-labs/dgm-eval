@@ -1,17 +1,18 @@
 import os
 import pathlib
-from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 import sys
+from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 
 import numpy as np
 import pandas as pd
 import torch
-from .dataloaders import get_dataloader
-from .metrics import *
-from .models import load_encoder, InceptionEncoder, MODELS
-from .representations import get_representations, load_reps_from_path, save_outputs
 
+from .dataloaders import get_dataloader
 from .heatmaps import visualize_heatmaps
+from .helpers import get_last_directory
+from .metrics import *
+from .models import MODELS, InceptionEncoder, load_encoder
+from .representations import get_representations, load_reps_from_path, save_outputs
 
 parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
 
@@ -354,9 +355,9 @@ def save_score(scores, output_dir, model, path, ckpt, nsample, is_only=False):
         ckpt_str = f"_ckpt-{os.path.splitext(os.path.basename(ckpt))[0]}"
 
     if is_only:
-        out_str = f"Inception_score_{'-'.join([os.path.basename(p) for p in path])}{ckpt_str}_nimage-{nsample}.txt"
+        out_str = f"Inception_score_{'-'.join([get_last_directory(p) for p in path])}{ckpt_str}_nimage-{nsample}.txt"
     else:
-        out_str = f"fd_{model}_{'-'.join([os.path.basename(p) for p in path])}{ckpt_str}_nimage-{nsample}.txt"
+        out_str = f"fd_{model}_{'-'.join([get_last_directory(p) for p in path])}{ckpt_str}_nimage-{nsample}.txt"
 
     out_path = os.path.join(output_dir, out_str)
     pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
