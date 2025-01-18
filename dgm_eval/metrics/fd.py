@@ -62,7 +62,6 @@ def compute_FD_with_stats(mu1, mu2, sigma1, sigma2, eps=1e-6):
 
     return mean_term+cov_term
 
-
 def compute_FD_with_reps(reps1, reps2, eps=1e-6):
     """
     Params:

@@ -48,7 +48,7 @@ parser.add_argument('--test_path', type=str, default=None,
 
 parser.add_argument('--metrics', type=str, nargs='+', default=['fd', 'fd-infinity', 'kd', 'prdc',
                                                                'is', 'authpct', 'ct', 'ct_test', 'ct_modified', 
-                                                               'fls', 'fls_overfit', 'vendi', 'sw_approx'],
+                                                               'fls', 'fls_overfit', 'vendi', 'sw_approx', 'energy'],
                     help="metrics to compute")
 
 parser.add_argument('-ckpt', '--checkpoint', type=str, default=None,
@@ -142,6 +142,20 @@ def compute_scores(args, reps, test_reps, labels=None):
 
     scores={}
     vendi_scores = None
+
+    if 'energy' in args.metrics:
+        #print("Computing Energy Distances \n", file=sys.stderr)
+        #scores['energy'] = compute_energy_with_reps(*reps)
+        #test_comparison = [reps[1], test_reps]
+        #scores['energy_test'] = compute_energy_with_reps(*test_comparison)
+        #scores['MMM_fd'] = scores['energy_test']/2 + scores['energy_test']/(scores['energy'] + scores['energy_test'])
+
+        print("Computing Energy Distances Naive \n", file=sys.stderr)
+        scores['energy_naive'] = compute_energy_with_reps_naive(*reps)
+        test_comparison = [reps[1], test_reps]
+        scores['energy_test_naive'] = compute_energy_with_reps_naive(*test_comparison)
+        scores['MMM_fd_naive'] = scores['energy_test_naive'] / 2 + scores['energy_test_naive'] / (
+                    scores['energy_naive'] + scores['energy_test_naive'])
 
     if 'fd' in args.metrics:
         print("Computing FD \n", file=sys.stderr)
@@ -313,6 +327,7 @@ def main():
     args = parser.parse_args()
 
     device, num_workers = get_device_and_num_workers(args.device, args.num_workers)
+    print(device, "deviceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
 
     IS_scores = None
     if 'is' in args.metrics and args.model == 'inception':
