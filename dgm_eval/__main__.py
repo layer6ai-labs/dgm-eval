@@ -229,6 +229,13 @@ def compute_scores(args, reps, test_reps, labels=None):
     scores = {}
     vendi_scores = None
 
+    if "energy" in args.metrics:
+        print("Computing Energy \n", file=sys.stderr)
+        scores["energy"] = compute_energy_with_reps_naive(*reps)
+        test_comparison = [reps[1], test_reps]
+        scores["energy_test"] = compute_energy_with_reps_naive(*test_comparison)
+        scores["MMM_energy"] = scores["energy_test"]/2 + (scores["energy_test"] / (scores["energy"] + scores["energy_test"])) / 2
+
     if "fd" in args.metrics:
         print("Computing FD \n", file=sys.stderr)
         scores["fd"] = compute_FD_with_reps(*reps)
