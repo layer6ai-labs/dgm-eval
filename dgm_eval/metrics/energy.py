@@ -104,7 +104,7 @@ def batch_pairwise_distance(x, y, batch_size):
     return sum_dist
 
 
-def energy_distance_naive(x, y, batch_size=100):
+def energy_distance_naive(x, y, batch_size=10):
     """Compute energy distance between two distributions with batching."""
     # Sum of distances between x and y
     d_xy = batch_pairwise_distance(x, y, batch_size)
@@ -119,26 +119,3 @@ def energy_distance_naive(x, y, batch_size=100):
     return (2 * d_xy - d_xx - d_yy) / (2 * d_xy)
 
 
-def incremental_pairwise_sum(x, y):
-    """Incrementally compute the sum of pairwise distances between x and y."""
-    sum_dist = 0.0
-    for i in range(len(x)):
-        dist = np.linalg.norm(x[i] - y, axis=1)  # Compute distances for one element
-        sum_dist += np.sum(dist)
-    return sum_dist
-
-'''
-def energy_distance_naive(x, y):
-    """Compute energy distance incrementally to save memory."""
-    # Sum of distances between x and y
-    d_xy = incremental_pairwise_sum(x, y)
-
-    # Sum of distances within x
-    d_xx = incremental_pairwise_sum(x, x)
-
-    # Sum of distances within y
-    d_yy = incremental_pairwise_sum(y, y)
-
-    # Energy distance formula
-    return (2 * d_xy - d_xx - d_yy) / (2 * d_xy)
-'''
