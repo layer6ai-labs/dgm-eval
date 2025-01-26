@@ -6,6 +6,7 @@ from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 import numpy as np
 import pandas as pd
 import torch
+import time
 
 from .dataloaders import get_dataloader
 from .heatmaps import visualize_heatmaps
@@ -230,11 +231,34 @@ def compute_scores(args, reps, test_reps, labels=None):
     vendi_scores = None
 
     if "energy" in args.metrics:
+
+        print("Computing Energy with JAX\n", file=sys.stderr)
+
+        # Measure time for jax computation
+        start_time = time.time()
+        scores["energy_jax"] = compute_energy_with_reps_naive_jax(*reps)
+        test_comparison = [reps[1], test_reps]
+        scores["energy_test_jax"] = compute_energy_with_reps_naive_jax(*test_comparison)
+        scores["MMM_energy_jax"] = scores["energy_test_jax"] / 2 + (
+                scores["energy_test_jax"] / (scores["energy_jax"] + scores["energy_test_jax"])
+        )
+        jax_time = time.time() - start_time
+        print(f"JAX computation took {jax_time:.6f} seconds", file=sys.stderr)
+
+        '''
         print("Computing Energy \n", file=sys.stderr)
+
+        # Measure time for non-jax computation
+        start_time = time.time()
         scores["energy"] = compute_energy_with_reps_naive(*reps)
         test_comparison = [reps[1], test_reps]
         scores["energy_test"] = compute_energy_with_reps_naive(*test_comparison)
-        scores["MMM_energy"] = scores["energy_test"]/2 + (scores["energy_test"] / (scores["energy"] + scores["energy_test"]))
+        scores["MMM_energy"] = scores["energy_test"] / 2 + (
+                scores["energy_test"] / (scores["energy"] + scores["energy_test"])
+        )
+        non_jax_time = time.time() - start_time
+        print(f"Non-JAX computation took {non_jax_time:.6f} seconds", file=sys.stderr)
+        '''
 
     if "fd" in args.metrics:
         print("Computing FD \n", file=sys.stderr)
