@@ -243,7 +243,7 @@ def compute_scores(args, reps, test_reps, labels=None):
                 scores["energy_test_jax"] / (scores["energy_jax"] + scores["energy_test_jax"])
         )
         jax_time = time.time() - start_time
-        print(f"JAX computation took {jax_time:.6f} seconds", file=sys.stderr)
+        print(f"JAX computations took {jax_time:.6f} seconds", file=sys.stderr)
 
         '''
         print("Computing Energy \n", file=sys.stderr)
