@@ -13,6 +13,7 @@ from PIL import Image
 
 IMAGE_EXTENSIONS = {'bmp', 'jpg', 'jpeg', 'pgm', 'png', 'ppm',
                     'tif', 'tiff', 'webp'}
+IMAGE_EXTENSIONS = IMAGE_EXTENSIONS | { ext.upper() for ext in IMAGE_EXTENSIONS }
 
 TORCHVISION_DATA_PATH = './data/'
 
