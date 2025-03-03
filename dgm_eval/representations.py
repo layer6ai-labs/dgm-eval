@@ -26,8 +26,8 @@ def get_representations(model, DataLoader, device, normalized=False):
     model.eval()
 
     start_idx = 0
-
     for ibatch, batch in enumerate(tqdm(DataLoader.data_loader)):
+
         if isinstance(batch, list):
             # batch is likely list[array(images), array(labels)]
             batch = batch[0]
