@@ -13,6 +13,7 @@ from PIL import Image
 
 IMAGE_EXTENSIONS = {'bmp', 'jpg', 'jpeg', 'pgm', 'png', 'ppm',
                     'tif', 'tiff', 'webp'}
+IMAGE_EXTENSIONS = IMAGE_EXTENSIONS | { ext.upper() for ext in IMAGE_EXTENSIONS }
 
 TORCHVISION_DATA_PATH = './data/'
 
@@ -111,7 +112,7 @@ class DataLoader():
 
         def get_order(file):
             filename = os.path.splitext(os.path.basename(file))[0]
-            return int(filename)
+            return int(filename) if filename.isnumeric() else filename
 
         if not self.files:
             # Assume sub-folders for image classes
