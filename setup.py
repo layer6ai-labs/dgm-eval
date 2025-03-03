@@ -40,7 +40,7 @@ if __name__ == '__main__':
             'torch>=2.0.0',
             'torchvision>=0.2.2',
             'transformers==4.26.0',
-            'xformers==0.0.18',
+            'xformers>=0.0.18',
         ],
         extras_require={'dev': ['flake8',
                                 'flake8-bugbear',

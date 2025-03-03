@@ -226,10 +226,10 @@ def get_dataloader(path, nsample=-1, batch_size=32, num_workers=1, transform=Non
     """Deal with format of input path, and get relevant DataLoader"""
 
     train_str='test'
-    if ':' in path:
+    if '--' in path:
         # Path is instead torchvision.dataset
-        # e.g. CIFAR10:train, MNIST:test, etc.
-        path, train_str = path.split(':')
+        # e.g. CIFAR10--train, MNIST--test, etc.
+        path, train_str = path.split('--')
 
     train_set = True if train_str.upper()=='TRAIN' else False
 
