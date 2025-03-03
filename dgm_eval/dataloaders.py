@@ -46,6 +46,25 @@ class ImagePathDataset(torch.utils.data.Dataset):
             img = self.transform(img)
         return img
 
+class NpzDataset(torch.utils.data.Dataset):
+    """
+    Create a custom dataset from a npz file of images, as used in ADM's evaluation code.
+    See https://github.com/openai/guided-diffusion/tree/main/evaluations for more details.
+    """
+    def __init__(self, path, transform=None):
+        self.path = path
+        self.data = np.load(path)['arr_0']
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        img = Image.fromarray(self.data[i]).convert('RGB')
+        if self.transform is not None:
+            img = self.transform(img)
+        return img
+
 class DataLoader():
     """
     Create Datasets and Dataloaders from ImagePathDataset and from torchvision.datasets.
@@ -86,10 +105,28 @@ class DataLoader():
         Get dataset from local path or from torchvision.datasets
         """
         if os.path.exists(self.path):
-            self.get_local_dataset()
+            if os.path.isfile(self.path) and self.path.endswith('.npz'):
+                self.get_local_adm_dataset()
+            else:
+                self.get_local_dataset()
 
         else:
             self.get_torchvision_dataset()
+
+    def get_local_adm_dataset(self):
+        """
+        Get dataset stored in ADM npz format (see https://github.com/openai/guided-diffusion/tree/main/evaluations) from disk
+        """
+
+        self.dataset_name = os.path.splitext(os.path.basename(os.path.normpath(self.path)))[0]
+
+        self.files = None
+        self.labels = None
+        # Confirm data at path is in proper format
+        try:
+            self.data_set = NpzDataset(self.path, transform=self.transform)
+        except:
+            raise RuntimeError(f'Images cannot be loaded from {self.path}. Expecting ADM-style npz file: {IMAGE_EXTENSIONS}')
 
     def get_local_dataset(self):
         """
