@@ -3,6 +3,7 @@ import re
 
 import matplotlib.pyplot as plt
 import numpy as np
+from sklearn.model_selection import train_test_split
 
 ####################################################################################################
 # Table of Contents
@@ -10,6 +11,7 @@ import numpy as np
 # Filename description utilities
 # Dict/List utilities
 # Dict/List aggregation utilities
+# Data management utilities
 # Reading utilities
 ####################################################################################################
 
@@ -336,6 +338,28 @@ def agg_mean_band(arrays, mode="std"):
         upper_values = np.percentile(arrays, 100 - level, axis=0)
 
     return mean_values, lower_values, upper_values
+
+
+# Data management utilities
+####################################################################################################
+
+
+def strat_tts_optional_labs(X, y, test_size=0.5, random_state=42):
+    if y is None:
+        X_train, X_test = train_test_split(
+            X,
+            test_size=test_size,
+            random_state=random_state,
+        )
+        return X_train, X_test, None, None
+
+    return train_test_split(
+        X,
+        y,
+        test_size=test_size,
+        random_state=random_state,
+        stratify=y,
+    )
 
 
 # Reading utilities

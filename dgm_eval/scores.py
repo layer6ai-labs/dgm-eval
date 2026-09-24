@@ -35,7 +35,7 @@ logging.basicConfig(
     force=True,
 )
 
-LAMBDAS = np.tan(np.linspace(0, np.pi / 2, 1000 + 1)[1:])
+LAMBDAS = np.tan(np.linspace(0, np.pi / 2, 152))[1:-1]
 
 
 ####################################################################################################
@@ -321,6 +321,7 @@ def compute_scores(
             f"\t classifier =  {args.pr_curve_clf}\n"
             f"\t samples = {reduced_n}\n"
             f"\t k = {args.nearest_k}\n"
+            f"\t split = {args.split}\n"
             + (f"\t label_method = {args.label_method}" if args.per_label else "")
         )
 
@@ -331,9 +332,9 @@ def compute_scores(
         scores[f"pr_curve_{args.pr_curve_clf}"] = compute_pr_curve(
             rr[inds0],
             rg[inds1],
-            nearest_k=args.nearest_k,
             clf=args.pr_curve_clf,
-            lambdas=LAMBDAS,
+            nearest_k=args.nearest_k,
+            split=args.split,
             **{
                 "derive_labelwise": True,
                 "real_labs": real_labs[inds0],
@@ -351,9 +352,9 @@ def compute_scores(
                 scores[f"pr_curve_{args.pr_curve_clf}"][label_key] = compute_pr_curve(
                     rr[inds0][real_labs[inds0] == lab],
                     rg[inds1][fake_labs[inds1] == lab],
-                    nearest_k=args.nearest_k,
                     clf=args.pr_curve_clf,
-                    lambdas=LAMBDAS,
+                    nearest_k=args.nearest_k,
+                    split=args.split,
                 )
 
     if "sw_approx" in args.metrics and label_key == "overall":
@@ -461,16 +462,18 @@ def aggregate_labelwise_scores(run_scores):
         metric_values = [run_scores[lk][metric_name] for lk in label_keys]
         mean, _ = aggregate(metric_values)
         run_scores["agg"][metric_name] = mean
-        # Compute diff as overall - agg (handle dict-valued metrics component-wise)
-        overall_value = run_scores["overall"][metric_name]
-        if isinstance(overall_value, dict) and isinstance(mean, dict):
-            run_scores["diff"][metric_name] = {
-                k: overall_value[k] - mean[k]
-                for k in overall_value
-                if k in mean and not isinstance(overall_value[k], dict)
-            }
-        else:
-            run_scores["diff"][metric_name] = overall_value - mean
+
+        if "overall" in run_scores:
+            # Compute diff as overall - agg (handle dict-valued metrics component-wise)
+            overall_value = run_scores["overall"][metric_name]
+            if isinstance(overall_value, dict) and isinstance(mean, dict):
+                run_scores["diff"][metric_name] = {
+                    k: overall_value[k] - mean[k]
+                    for k in overall_value
+                    if k in mean and not isinstance(overall_value[k], dict)
+                }
+            else:
+                run_scores["diff"][metric_name] = overall_value - mean
 
 
 ####################################################################################################
