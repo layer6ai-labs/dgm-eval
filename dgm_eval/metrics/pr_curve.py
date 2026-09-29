@@ -11,6 +11,11 @@ from scipy.stats import multivariate_normal
 from sklearn.metrics import pairwise_distances_chunked
 from sklearn.neighbors import NearestNeighbors
 
+try:  # np.trapz was removed in NumPy 2.x; np.trapezoid exists since 2.0
+    from numpy import trapezoid as _trapezoid
+except ImportError:  # NumPy < 2.0
+    from numpy import trapz as _trapezoid
+
 from dgm_eval.utils import strat_tts_optional_labs
 
 logger = logging.getLogger(__name__)
@@ -21,7 +26,6 @@ logging.basicConfig(
 )
 
 LAMBDAS = np.tan(np.linspace(0, np.pi / 2, 152))[1:-1]
-
 PR_CURVE_CLFS = ["cov", "ipr", "kde", "knn", "Cov", "iPR", "KDE", "kNN"]
 
 
@@ -751,3 +755,154 @@ def compute_pr_curve(
             }
 
     return d
+
+
+####################################################################################################
+# PR curve distillation with scalar metrics
+####################################################################################################
+
+
+def check_alphas_betas(alphas, betas):
+    alphas = np.asarray(alphas, dtype=np.float64)
+    betas = np.asarray(betas, dtype=np.float64)
+
+    if alphas.shape != betas.shape:
+        raise ValueError(
+            "alphas and betas must have same shape. "
+            f"Got {alphas.shape} vs {betas.shape}."
+        )
+
+    if alphas.size == 0:
+        raise ValueError("Empty curve.")
+
+    if np.any(alphas < 0) or np.any(betas < 0):
+        raise ValueError("alphas and betas must be non-negative.")
+
+    if np.any(np.diff(alphas) < -1e-12):
+        raise ValueError("alphas must be in non-decreasing order.")
+    if np.any(np.diff(betas) > 1e-12):
+        raise ValueError("betas must be in non-increasing order.")
+
+    if abs(alphas[0]) > 1e-12:
+        raise ValueError("alphas[0] must be 0 (alpha is 0 at lambda = 0).")
+    if abs(betas[-1]) > 1e-12:
+        raise ValueError("betas[-1] must be 0 (beta is 0 at lambda = inf).")
+
+    return alphas, betas
+
+
+def auc(alphas, betas):
+    """
+    When AUC=0, distributions have disjoint support.
+    When AUC=1, distributions are identical.
+    """
+    alphas, betas = check_alphas_betas(alphas, betas)
+    return float(_trapezoid(alphas[::-1], betas[::-1]))
+
+
+def f_score(alphas, betas, b=8.0):
+    """
+    Proposed by Sajjadi 2018.
+    """
+    alphas, betas = check_alphas_betas(alphas, betas)
+
+    b2 = float(b) ** 2
+    num = b2 + 1.0
+
+    valid = (alphas > 0) & (betas > 0)
+    if not np.any(valid):
+        return 0.0
+    den = b2 / alphas[valid] + 1.0 / betas[valid]
+
+    f = num / den
+
+    return float(f.max())
+
+
+def f_scores(alphas, betas, b=8.0):
+    """
+    When b is large, F and F_inv mainly capture mode dropping and mode invention.
+    """
+    return f_score(alphas, betas, b), f_score(alphas, betas, 1.0 / b)
+
+
+def pr_median(alphas, betas, return_lambda=False):
+    """
+    Point (alpha_lbar, beta_lbar) on the curve such that the ray alpha = lbar * beta
+    splits the area under the PR curve into two equal halves.
+
+    The points are already ordered by increasing slope alpha/beta, so the region
+    under the closed curve is the union of the triangles (O, p_i, p_{i+1}).
+    The cumulative area is walked until half the total is reached; the crossing
+    point is interpolated linearly on that segment (the area swept from O is
+    linear along a segment). Ties give degenerate (zero-area) triangles only when
+    p_i and p_{i+1} lie on the same ray, which is harmless.
+
+    Returns (alpha_bar, beta_bar), plus lbar if return_lambda=True.
+    """
+    alphas, betas = check_alphas_betas(alphas, betas)
+
+    # tri >= 0 given the ordering
+    tri = 0.5 * (betas[:-1] * alphas[1:] - betas[1:] * alphas[:-1])
+    tri = np.clip(tri, 0.0, None)  # guard against round-off
+    total = tri.sum()
+    if total <= 0:
+        return (0.0, 0.0, 0.0) if return_lambda else (0.0, 0.0)
+
+    half = total / 2.0
+    cum = np.cumsum(tri)
+    k = min(int(np.searchsorted(cum, half)), tri.size - 1)
+    prev = cum[k - 1] if k > 0 else 0.0
+    t = (half - prev) / tri[k] if tri[k] > 0 else 0.0
+    alpha_bar = alphas[k] + t * (alphas[k + 1] - alphas[k])
+    beta_bar = betas[k] + t * (betas[k + 1] - betas[k])
+
+    if return_lambda:
+        lbar = np.inf if beta_bar == 0 else alpha_bar / beta_bar
+        return float(alpha_bar), float(beta_bar), float(lbar)
+
+    return float(alpha_bar), float(beta_bar)
+
+
+def precision_at_recall(alphas, betas, eps=0.05):
+    """
+    alpha@eps = max alpha such that (alpha, eps) is on the PRD curve, i.e. the
+    precision read on the curve at recall beta = eps.
+
+    Scans every segment [p_i, p_{i+1}] whose recall range contains eps and
+    interpolates alpha there. A vertical segment located exactly at beta = eps
+    (tie in betas) contributes its upper end, hence the max.
+    Returns 0 if eps > beta_0 (max recall).
+    """
+    a, b = check_alphas_betas(alphas, betas)
+    if eps > b[0]:
+        return 0.0
+    b0, b1, a0, a1 = b[:-1], b[1:], a[:-1], a[1:]
+    hit = (b0 >= eps) & (b1 <= eps)  # betas are non-increasing
+    vertical = hit & (b0 == b1)
+    sloped = hit & ~vertical
+    cands = []
+    if np.any(vertical):
+        cands.append(np.maximum(a0[vertical], a1[vertical]))
+    if np.any(sloped):
+        t = (b0[sloped] - eps) / (b0[sloped] - b1[sloped])
+        cands.append(a0[sloped] + t * (a1[sloped] - a0[sloped]))
+    return float(np.max(np.concatenate(cands)))
+
+
+def recall_at_precision(alphas, betas, eps=0.05):
+    """
+    beta@eps = max beta such that (eps, beta) is on the PRD curve, i.e. the
+    recall read on the curve at precision alpha = eps.
+    By symmetry, reversing the arrays swaps the roles of alpha and beta while
+    keeping the required ordering. Returns 0 if eps > alpha_inf (max precision).
+    """
+    return precision_at_recall(betas[::-1], alphas[::-1], eps)
+
+
+def pr_at_eps(alphas, betas, eps=0.05):
+    """Returns the pair (alpha@eps, beta@eps)."""
+    return (
+        precision_at_recall(alphas, betas, eps),
+        recall_at_precision(alphas, betas, eps),
+    )
