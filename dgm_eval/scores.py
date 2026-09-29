@@ -26,7 +26,13 @@ from .metrics import (
     compute_prdc,
     sw_approx,
 )
-from .utils import extend_path, list_of_dicts_to_dict_of_lists, make_str, remove_subs
+from .utils import (
+    extend_path,
+    fmt_duration,
+    list_of_dicts_to_dict_of_lists,
+    make_str,
+    remove_subs,
+)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -35,95 +41,22 @@ logging.basicConfig(
     force=True,
 )
 
-LAMBDAS = np.tan(np.linspace(0, np.pi / 2, 152))[1:-1]
-
 
 ####################################################################################################
 # Table of Contents
 ####################################################################################################
-# Aggregate
+# CONSTANTS
 # Compute
-# Labels
+# Unpack
+# Aggregate
+# Label management
 # Randomness
 # Run
 # Save
 ####################################################################################################
 
 
-def _fmt_duration(seconds):
-    """Format a duration in seconds as 'Hh Mm' (or 'Mm' if under an hour)."""
-    seconds = int(seconds)
-    hours, remainder = divmod(seconds, 3600)
-    minutes, _ = divmod(remainder, 60)
-    if hours > 0:
-        return f"{hours}h {minutes}m"
-    return f"{minutes}m"
-
-
-####################################################################################################
-# Aggregate
-####################################################################################################
-
-
-def aggregate(values):
-    """Aggregate one metric across runs into (mean, std).
-
-    Handles plain scalars as well as nested dicts (e.g. per-label score dicts),
-    and array-valued metrics (e.g. precision/recall curves).
-    For array-valued metrics, aggregates per-point across runs.
-    Handles NaN values from runs with insufficient samples.
-    """
-    if isinstance(values[0], dict):
-        mean, std = {}, {}
-        for k in values[0]:
-            mean[k], std[k] = aggregate([v[k] for v in values])
-        return mean, std
-
-    arr = np.array(values)
-    # If arr is 2D+, it's an array-valued metric: aggregate per-point (along axis 0)
-    # If arr is 1D, it's scalar values: aggregate globally
-    # Use nanmean/nanstd to ignore NaN values from failed runs (insufficient samples)
-    if arr.ndim >= 2:
-        return np.nanmean(arr, axis=0), np.nanstd(arr, axis=0)
-    else:
-        return np.nanmean(arr), np.nanstd(arr)
-
-
-def aggregate_runwise_scores(all_runs_scores, args):
-    """Aggregate scores across multiple runs into mean and std.
-
-    Takes per-run scores (list of dicts with keys: overall, label-i, agg, diff)
-    and computes mean and std across runs for each metric and label.
-
-    Args:
-        all_runs_scores: list of dicts, one per run, each containing {label_key: {metric: value}}
-        args: args object with nruns attribute
-
-    Returns:
-        all_scores: dict with aggregated results {label_key: {metric: mean_value, metric_std: std_value}}
-    """
-    logger.info("Aggregating runwise scores")
-
-    all_scores = {}
-    all_keys = all_runs_scores[0].keys()
-
-    for key in all_keys:  # overall, label-i, agg, diff
-        all_metrics = all_runs_scores[0][key].keys()
-        mean_scores, std_scores = {}, {}
-
-        for metric in all_metrics:
-            values = [run[key][metric] for run in all_runs_scores]
-            if metric == "realism":
-                mean_scores[metric] = values[-1]
-                continue
-            # values may be scalars or nested per-label dicts
-            mean_scores[metric], std_scores[metric] = aggregate(values)
-
-        all_scores[key] = mean_scores
-        if args.nruns > 1:
-            all_scores[f"{key}_std"] = std_scores
-
-    return all_scores
+LAMBDAS = np.tan(np.linspace(0, np.pi / 2, 152))[1:-1]
 
 
 ####################################################################################################
@@ -373,6 +306,151 @@ def compute_scores(
     return scores, vendi_scores
 
 
+###################################################################################################
+# Unpack
+###################################################################################################
+
+
+def unpack_nested_labelwise_metric(run_scores):
+    """Auto-detect and unpack all metrics with nested labelwise results.
+
+    Scans run_scores["overall"] for metrics that contain nested per-label dicts
+    (keyed by "label-i") and unpacks them into the flat run_scores structure.
+
+    Transforms: run_scores["overall"]["prdc"] = {P: ..., label-0: {P: ...}, label-1: {...}}
+    Into: run_scores["overall"]["prdc"] = {P: ...}
+          run_scores["label-0"]["prdc"] = {P: ...}
+          run_scores["label-1"]["prdc"] = {P: ...}
+
+    This is called for rfc/rcf label methods where metrics return nested results.
+    """
+    if "overall" not in run_scores:
+        return
+
+    for metric_name in list(run_scores["overall"].keys()):
+        metric_data = run_scores["overall"].get(metric_name)
+        # Check if this metric has nested labelwise structure
+        if not isinstance(metric_data, dict):
+            continue
+
+        label_keys = [k for k in metric_data if k.startswith("label-")]
+        if not label_keys:
+            continue
+
+        # Extract overall results (everything that's not label-i)
+        overall_data = {
+            k: v for k, v in metric_data.items() if not k.startswith("label-")
+        }
+        run_scores["overall"][metric_name] = overall_data
+
+        # Unpack per-label results
+        for label_key in label_keys:
+            label_data = metric_data[label_key]
+            if label_key not in run_scores:
+                run_scores[label_key] = {}
+            run_scores[label_key][metric_name] = label_data
+
+
+####################################################################################################
+# Aggregate
+####################################################################################################
+
+
+def aggregate(values):
+    """Aggregate one metric across runs into (mean, std).
+
+    Handles plain scalars as well as nested dicts (e.g. per-label score dicts),
+    and array-valued metrics (e.g. precision/recall curves).
+    For array-valued metrics, aggregates per-point across runs.
+    Handles NaN values from runs with insufficient samples.
+    """
+    if isinstance(values[0], dict):
+        mean, std = {}, {}
+        for k in values[0]:
+            mean[k], std[k] = aggregate([v[k] for v in values])
+        return mean, std
+
+    arr = np.array(values)
+    # If arr is 2D+, it's an array-valued metric: aggregate per-point (along axis 0)
+    # If arr is 1D, it's scalar values: aggregate globally
+    # Use nanmean/nanstd to ignore NaN values from failed runs (insufficient samples)
+    if arr.ndim >= 2:
+        return np.nanmean(arr, axis=0), np.nanstd(arr, axis=0)
+    else:
+        return np.nanmean(arr), np.nanstd(arr)
+
+
+def aggregate_labelwise_scores(run_scores):
+    """Average label-* scores within a run into run_scores["agg"] (in place).
+
+    Handles scalars, arrays, and nested dicts (e.g., pr_curve results).
+    Also computes run_scores["diff"] as the difference between overall and agg.
+    """
+    logger.debug("Aggregating labelwise scores into 'agg' entry")
+
+    label_keys = [k for k in run_scores if k.startswith("label-")]
+    if not label_keys:
+        return
+
+    sample_keys = [k for k in run_scores[label_keys[0]] if k != "realism"]
+    run_scores["agg"] = {}
+    run_scores["diff"] = {}
+
+    for metric_name in sample_keys:
+        metric_values = [run_scores[lk][metric_name] for lk in label_keys]
+        mean, _ = aggregate(metric_values)
+        run_scores["agg"][metric_name] = mean
+
+        if "overall" in run_scores:
+            # Compute diff as overall - agg (handle dict-valued metrics component-wise)
+            overall_value = run_scores["overall"][metric_name]
+            if isinstance(overall_value, dict) and isinstance(mean, dict):
+                run_scores["diff"][metric_name] = {
+                    k: overall_value[k] - mean[k]
+                    for k in overall_value
+                    if k in mean and not isinstance(overall_value[k], dict)
+                }
+            else:
+                run_scores["diff"][metric_name] = overall_value - mean
+
+
+def aggregate_runwise_scores(all_runs_scores, args):
+    """Aggregate scores across multiple runs into mean and std.
+
+    Takes per-run scores (list of dicts with keys: overall, label-i, agg, diff)
+    and computes mean and std across runs for each metric and label.
+
+    Args:
+        all_runs_scores: list of dicts, one per run, each containing {label_key: {metric: value}}
+        args: args object with nruns attribute
+
+    Returns:
+        all_scores: dict with aggregated results {label_key: {metric: mean_value, metric_std: std_value}}
+    """
+    logger.debug("Aggregating runwise scores")
+
+    all_scores = {}
+    all_keys = all_runs_scores[0].keys()
+
+    for key in all_keys:  # overall, label-i, agg, diff
+        all_metrics = all_runs_scores[0][key].keys()
+        mean_scores, std_scores = {}, {}
+
+        for metric in all_metrics:
+            values = [run[key][metric] for run in all_runs_scores]
+            if metric == "realism":
+                mean_scores[metric] = values[-1]
+                continue
+            # values may be scalars or nested per-label dicts
+            mean_scores[metric], std_scores[metric] = aggregate(values)
+
+        all_scores[key] = mean_scores
+        if args.nruns > 1:
+            all_scores[f"{key}_std"] = std_scores
+
+    return all_scores
+
+
 ####################################################################################################
 # Labels
 ####################################################################################################
@@ -400,80 +478,6 @@ def labelwise_setup(args, labels):
         return real_labs, gen_labs, np.array([])
 
     return real_labs, gen_labs, np.unique(real_labs)
-
-
-def unpack_nested_labelwise_metric(run_scores):
-    """Auto-detect and unpack all metrics with nested labelwise results.
-
-    Scans run_scores["overall"] for metrics that contain nested per-label dicts
-    (keyed by "label-i") and unpacks them into the flat run_scores structure.
-
-    Transforms: run_scores["overall"]["prdc"] = {P: ..., label-0: {P: ...}, label-1: {...}}
-    Into: run_scores["overall"]["prdc"] = {P: ...}
-          run_scores["label-0"]["prdc"] = {P: ...}
-          run_scores["label-1"]["prdc"] = {P: ...}
-
-    This is called for rfc/rcf label methods where metrics return nested results.
-    """
-    if "overall" not in run_scores:
-        return
-
-    for metric_name in list(run_scores["overall"].keys()):
-        metric_data = run_scores["overall"].get(metric_name)
-        # Check if this metric has nested labelwise structure
-        if not isinstance(metric_data, dict):
-            continue
-
-        label_keys = [k for k in metric_data.keys() if k.startswith("label-")]
-        if not label_keys:
-            continue
-
-        # Extract overall results (everything that's not label-i)
-        overall_data = {
-            k: v for k, v in metric_data.items() if not k.startswith("label-")
-        }
-        run_scores["overall"][metric_name] = overall_data
-
-        # Unpack per-label results
-        for label_key in label_keys:
-            label_data = metric_data[label_key]
-            if label_key not in run_scores:
-                run_scores[label_key] = {}
-            run_scores[label_key][metric_name] = label_data
-
-
-def aggregate_labelwise_scores(run_scores):
-    """Average label-* scores within a run into run_scores["agg"] (in place).
-
-    Handles scalars, arrays, and nested dicts (e.g., pr_curve results).
-    Also computes run_scores["diff"] as the difference between overall and agg.
-    """
-    logger.info("Aggregating labelwise scores into 'agg' entry")
-
-    label_keys = [k for k in run_scores if k.startswith("label-")]
-    if not label_keys:
-        return
-
-    sample_keys = [k for k in run_scores[label_keys[0]] if k != "realism"]
-    run_scores["agg"] = {}
-    run_scores["diff"] = {}
-
-    for metric_name in sample_keys:
-        metric_values = [run_scores[lk][metric_name] for lk in label_keys]
-        mean, _ = aggregate(metric_values)
-        run_scores["agg"][metric_name] = mean
-
-        if "overall" in run_scores:
-            # Compute diff as overall - agg (handle dict-valued metrics component-wise)
-            overall_value = run_scores["overall"][metric_name]
-            if isinstance(overall_value, dict) and isinstance(mean, dict):
-                run_scores["diff"][metric_name] = {
-                    k: overall_value[k] - mean[k]
-                    for k in overall_value
-                    if k in mean and not isinstance(overall_value[k], dict)
-                }
-            else:
-                run_scores["diff"][metric_name] = overall_value - mean
 
 
 ####################################################################################################
@@ -630,8 +634,8 @@ def run_compute_scores(args, real_reps, fake_reps, test_reps, labels=None):
         eta_clock = datetime.now() + timedelta(seconds=remaining)
         logger.info(
             f"\n[progress] {n_done}/{args.nruns} runs done ({frac_done:.0%}) | "
-            f"elapsed: {_fmt_duration(elapsed)} | "
-            f"remaining: {_fmt_duration(remaining)} | "
+            f"elapsed: {fmt_duration(elapsed)} | "
+            f"remaining: {fmt_duration(remaining)} | "
             f"ETA: {eta_clock.strftime('%H:%M')}"
             f"\n"
         )

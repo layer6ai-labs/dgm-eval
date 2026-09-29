@@ -377,3 +377,18 @@ def get_label_keys(run):
         [k for k in run if k.startswith("label-") and not k.endswith("_std")],
         key=lambda x: int(x.split("-")[1]),
     )
+
+
+####################################################################################################
+# Logging utilities
+####################################################################################################
+
+
+def fmt_duration(seconds):
+    """Format a duration in seconds as 'Hh Mm' (or 'Mm' if under an hour)."""
+    seconds = int(seconds)
+    hours, remainder = divmod(seconds, 3600)
+    minutes, _ = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
