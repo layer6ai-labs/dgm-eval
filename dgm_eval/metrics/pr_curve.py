@@ -28,10 +28,14 @@ logging.basicConfig(
 LAMBDAS = np.tan(np.linspace(0, np.pi / 2, 152))[1:-1]
 PR_CURVE_CLFS = ["cov", "ipr", "kde", "knn", "Cov", "iPR", "KDE", "kNN"]
 
+WORKING_MEMORY = 512
 
-# --------------------------------------------------------------------------------
+HANDLE_LABELS = ["filter_dataset", "filter_probes", "filter_centers"]
+
+
+####################################################################################################
 # UTILS
-# --------------------------------------------------------------------------------
+####################################################################################################
 
 
 def resolve_k(k, n):
@@ -42,9 +46,6 @@ def resolve_k(k, n):
         k = int(np.sqrt(n))
         logger.debug(f"k = -1. Setting it to sqrt of num samples: {k}")
     return k
-
-
-WORKING_MEMORY = 512
 
 
 def kth_nn_radius(
@@ -95,6 +96,27 @@ def count_points_in_probe_ball(
     return out
 
 
+def count_points_in_probe_ball_labelwise(
+    probes,
+    probes_labs,
+    points,
+    points_labs,
+    radii,
+):
+    """
+    Label-filtered counting (radii/bandwidths stay pooled, probes and centers are
+    filtered by label).
+    """
+    radii = np.broadcast_to(np.asarray(radii, dtype=np.float64), (probes.shape[0],))
+    out = np.zeros(probes.shape[0], dtype=np.float64)
+    for y in np.unique(probes_labs):
+        Mz = probes_labs == y
+        Mp = points_labs == y
+        if Mz.any() and Mp.any():
+            out[Mz] = count_points_in_probe_ball(points[Mp], probes[Mz], radii[Mz])
+    return out
+
+
 def count_balls_containing_probe(
     probes: np.ndarray,
     centers: np.ndarray,
@@ -113,6 +135,26 @@ def count_balls_containing_probe(
     ):
         out[offset : offset + chunk.shape[0]] = (chunk <= radii[None, :]).sum(axis=1)
         offset += chunk.shape[0]
+    return out
+
+
+def count_balls_containing_probes_labelwise(
+    probes,
+    probes_labs,
+    centers,
+    center_labs,
+    radii,
+):
+    """
+    Label-filtered counting (radii/bandwidths stay pooled, probes and centers are
+    filtered by label).
+    """
+    out = np.zeros(probes.shape[0], dtype=np.float64)
+    for y in np.unique(probes_labs):
+        Mz = probes_labs == y
+        Mc = center_labs == y
+        if Mz.any() and Mc.any():
+            out[Mz] = count_balls_containing_probe(probes[Mz], centers[Mc], radii[Mc])
     return out
 
 
@@ -200,30 +242,14 @@ def log_likelihood_ratio_score_gmm(
     return log_p - log_q
 
 
-def cov_score(
-    z: np.ndarray,
-    X: np.ndarray,
-    Y: np.ndarray,
-    k: int,
-) -> np.ndarray:
-    """
-    As per experiments to match Fig 16, authors seem to not exlude self.
-    """
+def cov_score(z: np.ndarray, X: np.ndarray, Y: np.ndarray, k: int) -> np.ndarray:
     # manual flag for testing purposes
     allow_exclusion = False
+    z_is_X = allow_exclusion and np.array_equal(z, X)
+    z_is_Y = allow_exclusion and np.array_equal(z, Y)
 
-    z_to_X_knn_radii = kth_nn_radius(
-        z,
-        X,
-        k,
-        exclude_self=allow_exclusion and np.array_equal(z, X),
-    )
-    z_to_Y_knn_radii = kth_nn_radius(
-        z,
-        Y,
-        k,
-        exclude_self=allow_exclusion and np.array_equal(z, Y),
-    )
+    z_to_X_knn_radii = kth_nn_radius(z, X, k, exclude_self=z_is_X)
+    z_to_Y_knn_radii = kth_nn_radius(z, Y, k, exclude_self=z_is_Y)
 
     n_X_in_Y_ball = count_points_in_probe_ball(X, z, z_to_Y_knn_radii)
     n_Y_in_X_ball = count_points_in_probe_ball(Y, z, z_to_X_knn_radii)
@@ -231,15 +257,25 @@ def cov_score(
     return n_X_in_Y_ball, n_Y_in_X_ball
 
 
-def ipr_score(
-    z: np.ndarray,
-    X: np.ndarray,
-    Y: np.ndarray,
-    k: int,
-) -> np.ndarray:
-    """
-    As per experiments to match Fig 16, authors seem to not exlude self.
-    """
+def cov_score_FC(z, Yz, Xr, Yr, Xg, Yg, k):
+    z_to_real_radii = kth_nn_radius(z, Xr, k, exclude_self=False)
+    z_to_fake_radii = kth_nn_radius(z, Xg, k, exclude_self=False)
+
+    n_real_in_fake_ball = count_points_in_probe_ball_labelwise(
+        z, Yz, Xr, Yr, z_to_fake_radii
+    )
+    n_fake_in_real_ball = count_points_in_probe_ball_labelwise(
+        z,
+        Yz,
+        Xg,
+        Yg,
+        z_to_real_radii,
+    )
+
+    return n_real_in_fake_ball, n_fake_in_real_ball
+
+
+def ipr_score(z: np.ndarray, X: np.ndarray, Y: np.ndarray, k: int) -> np.ndarray:
     # manual flag for testing purposes
     allow_exclusion = False
 
@@ -248,6 +284,28 @@ def ipr_score(
 
     p_hat = count_balls_containing_probe(z, X, X_to_X_knn_radii)
     q_hat = count_balls_containing_probe(z, Y, Y_to_Y_knn_radii)
+
+    return p_hat, q_hat
+
+
+def ipr_score_FC(z, Yz, Xr, Yr, Xg, Yg, k):
+    real_to_real_knn_radii = kth_nn_radius(Xr, Xr, k, exclude_self=False)
+    fake_to_fake_knn_radii = kth_nn_radius(Xg, Xg, k, exclude_self=False)
+
+    p_hat = count_balls_containing_probes_labelwise(
+        z,
+        Yz,
+        Xr,
+        Yr,
+        real_to_real_knn_radii,
+    )
+    q_hat = count_balls_containing_probes_labelwise(
+        z,
+        Yz,
+        Xg,
+        Yg,
+        fake_to_fake_knn_radii,
+    )
 
     return p_hat, q_hat
 
@@ -268,24 +326,24 @@ def kde_score(z, X, Y, k):
     return p_hat, q_hat
 
 
-def knn_score(
-    z: np.ndarray,
-    X: np.ndarray,
-    Y: np.ndarray,
-    k: int,
-) -> np.ndarray:
-    """
-    As per experiments to match Fig 16, authors seem to not exlude self.
-    """
+def kde_score_FC(z, Yz, Xr, Yr, Xg, Yg, k):
+    bandwidth_r = np.mean(kth_nn_radius(Xr, Xr, k, exclude_self=False))
+    bandwidth_g = np.mean(kth_nn_radius(Xg, Xg, k, exclude_self=False))
+
+    p_hat = count_points_in_probe_ball_labelwise(z, Yz, Xr, Yr, bandwidth_r)
+    q_hat = count_points_in_probe_ball_labelwise(z, Yz, Xg, Yg, bandwidth_g)
+
+    return p_hat, q_hat
+
+
+def knn_score(z: np.ndarray, X: np.ndarray, Y: np.ndarray, k: int) -> np.ndarray:
     # manual flag for testing purposes
     allow_exclusion = False
+    self_query = np.array_equal(z, X) or np.array_equal(z, Y)
+    n_neighbors = k + 1 if allow_exclusion and self_query else k
 
     XY = np.vstack([X, Y])
     labels = np.array([0] * len(X) + [1] * len(Y))  # 0: X, 1: Y
-
-    # exclude self
-    self_query = np.array_equal(z, X) or np.array_equal(z, Y)
-    n_neighbors = k + 1 if allow_exclusion and self_query else k
 
     # _, indices = kth_nearest_neighbours(z, XY, k)  # (|z|, k)
 
@@ -300,6 +358,32 @@ def knn_score(
     n_Y = (neighbour_labels == 1).sum(axis=1).astype(float)
 
     return n_X, n_Y
+
+
+def knn_score_FC(z, Yz, Xr, Yr, Xg, Yg, k):
+    X = np.vstack([Xr, Xg])
+    Y = np.concatenate([Yr, Yg])
+    src = np.concatenate(
+        [
+            np.zeros(Xr.shape[0], dtype=int),
+            np.ones(Xg.shape[0], dtype=int),
+        ]
+    )
+
+    nn = NearestNeighbors(n_neighbors=k).fit(X)
+    _, indices = nn.kneighbors(z)  # (|z|, k)
+
+    neigh_src = src[indices]  # (|z|, k)
+    neigh_lab = Y[indices]  # (|z|, k)
+
+    neigh_is_real = neigh_src == 0
+    neigh_is_fake = neigh_src == 1
+    match_label = neigh_lab == Yz[:, None]
+
+    n_real_in_ball = (neigh_is_real & match_label).sum(axis=1).astype(float)
+    n_fake_in_ball = (neigh_is_fake & match_label).sum(axis=1).astype(float)
+
+    return n_real_in_ball, n_fake_in_ball
 
 
 # # --------------------------------------------------------------------------------
@@ -492,7 +576,7 @@ def knn_score(
 #     return p_hat / (q_hat + 1e-12)
 
 
-SCORE = {
+SCORES = {
     "cov": cov_score,
     "ipr": ipr_score,
     "kde": kde_score,
@@ -501,6 +585,16 @@ SCORE = {
     "iPR": ipr_score,
     "KDE": kde_score,
     "kNN": knn_score,
+}
+SCORES_FC = {
+    "cov": cov_score_FC,
+    "ipr": ipr_score_FC,
+    "kde": kde_score_FC,
+    "knn": knn_score_FC,
+    "Cov": cov_score_FC,
+    "iPR": ipr_score_FC,
+    "KDE": kde_score_FC,
+    "kNN": knn_score_FC,
 }
 
 
@@ -588,8 +682,8 @@ def pr_curve(
         print(f"Using k = sqrt(n) for {clf} (n={len(X_train)}, k={k})")
 
     # Matching scores
-    scores_X_vs_X, scores_X_vs_Y = SCORE[clf](X_test, X_train, Y_train, k)  # (N,)
-    scores_Y_vs_X, scores_Y_vs_Y = SCORE[clf](Y_test, X_train, Y_train, k)  # (N,)
+    scores_X_vs_X, scores_X_vs_Y = SCORES[clf](X_test, X_train, Y_train, k)  # (N,)
+    scores_Y_vs_X, scores_Y_vs_Y = SCORES[clf](Y_test, X_train, Y_train, k)  # (N,)
 
     return pr_curve_from_scores(
         scores_X_vs_X, scores_X_vs_Y, scores_Y_vs_X, scores_Y_vs_Y, lambdas
@@ -658,8 +752,8 @@ def compute_pr_curve(
 
     ### Check inputs ###
 
-    if clf not in SCORE:
-        raise ValueError(f"Clf {clf} not supported. Choose from {list(SCORE.keys())}.")
+    if clf not in SCORES:
+        raise ValueError(f"Clf {clf} not supported. Choose from {list(SCORES.keys())}.")
 
     if derive_labelwise and (real_labs is None or fake_labs is None):
         raise ValueError("Arg `derive_labelwise` needs `real_labs` and `fake_labs`.")
@@ -703,13 +797,13 @@ def compute_pr_curve(
 
     ### Compute metric ###
 
-    scores_real_vs_X, scores_real_vs_Y = SCORE[clf](
+    scores_real_vs_X, scores_real_vs_Y = SCORES[clf](
         Xr_test,
         Xr_train,
         Xg_train,
         nearest_k,
     )
-    scores_fake_vs_X, scores_fake_vs_Y = SCORE[clf](
+    scores_fake_vs_X, scores_fake_vs_Y = SCORES[clf](
         Xg_test,
         Xr_train,
         Xg_train,
@@ -768,6 +862,218 @@ def compute_pr_curve(
                 "param_k": nearest_k,
                 "param_split": split,
             }
+
+    return d
+
+
+def compute_pr_curve_cond(
+    Xr,
+    Xg,
+    Yr: np.ndarray = None,
+    Yg: np.ndarray = None,
+    clf: str = "ipr",
+    nearest_k: int | None = None,
+    split: bool = True,
+    handle_labels: str | None = None,
+    lambdas: np.ndarray = None,
+):
+    """
+    Compute the pooled PR curve and, if `handle_labels` is set, a per-label PR
+    curve for each label.
+
+    Args:
+        Xr, Xg: pooled real / fake features, shape (N_real, dim) / (N_fake, dim)
+        Yr, Yg: integer labels in [0, n_labels-1], shape (N_real,) / (N_fake,).
+        clf: classifier name ('cov', 'ipr', 'kde', 'knn')
+        nearest_k: number of neighbors. None or -1 sets k = sqrt(n_real)
+        split: if True, use train/test halves for fitting / evaluating
+        handle_labels: None (no per-label computation) or one of HANDLE_LABELS
+            'filter_dataset' (FD: unconditional estimator on label-y samples only),
+            'filter_probes' (FP: unconditional classifier, probes masked by label),
+            'filter_centers' (FC: pooled radii, centers masked by label)
+        lambdas: lambda thresholds for risk computation
+
+    Returns:
+        dict with keys:
+            - 'P', 'R': overall (unconditional, pooled) precision/recall curves
+            - 'label-i': per-label dict, (only if `handle_labels` is not None)
+    """
+
+    ### Check inputs ###
+
+    if clf not in SCORES:
+        raise ValueError(f"Clf {clf} not supported. Choose from {list(SCORES.keys())}.")
+
+    if handle_labels is not None and handle_labels not in HANDLE_LABELS:
+        raise ValueError(f"handle_labels={handle_labels!r} must be in {HANDLE_LABELS}.")
+
+    if handle_labels is not None and (Yr is None or Yg is None):
+        raise ValueError(f"handle_labels={handle_labels!r} needs `Yr` and `Yg`.")
+
+    if lambdas is None:
+        lambdas = LAMBDAS
+
+    ### Integrate inputs ###
+
+    Nr, Ng = int(Xr.shape[0]), int(Xg.shape[0])
+    n_lambdas = len(lambdas)
+
+    k = resolve_k(nearest_k, Nr)
+
+    # Return NaN if insufficient samples: FP/FC keep pooled radii, so this is
+    # the only place they need k+1 samples (FD re-checks per label below).
+    if Nr < k + 1 or Ng < k + 1:
+        logger.warning(
+            f"Insufficient samples (real: {Nr}, fake: {Ng}, "
+            f"need: {k + 1}). Returning NaN curve."
+        )
+        return nan_pr_curve(n_lambdas, Nr, Ng, k, split)
+
+    if split:
+        Xr_train, Xr_test, Yr_train, Yr_test = strat_tts_optional_labs(Xr, Yr)
+        Xg_train, Xg_test, Yg_train, Yg_test = strat_tts_optional_labs(Xg, Yg)
+    else:
+        Xr_train, Xr_test = Xr, Xr
+        Yr_train, Yr_test = Yr, Yr
+        Xg_train, Xg_test = Xg, Xg
+        Yg_train, Yg_test = Yg, Yg
+
+    ### Compute unconditional/pooled metric ###
+
+    scores_real_vs_X, scores_real_vs_Y = SCORES[clf](
+        Xr_test,
+        Xr_train,
+        Xg_train,
+        k,
+    )
+    scores_fake_vs_X, scores_fake_vs_Y = SCORES[clf](
+        Xg_test,
+        Xr_train,
+        Xg_train,
+        k,
+    )
+    alphas, betas = pr_curve_from_scores(
+        scores_real_vs_X,
+        scores_real_vs_Y,
+        scores_fake_vs_X,
+        scores_fake_vs_Y,
+        lambdas,
+    )
+    d = {
+        "P": alphas,
+        "R": betas,
+        "n_real": Nr,
+        "n_fake": Ng,
+        "param_k": k,
+        "param_split": split,
+    }
+
+    if handle_labels is None:
+        return d
+
+    ### Compute per-label metric ###
+
+    Ny = int(max(Yr.max(), Yg.max())) + 1
+
+    if handle_labels == "filter_dataset":
+        # FD: scores are computed per label, inside the loop below.
+        pass
+
+    elif handle_labels == "filter_probes":
+        # FP: reuse the pooled scores above, only the probes get masked by label below.
+        real_vs_X, real_vs_Y = scores_real_vs_X, scores_real_vs_Y
+        fake_vs_X, fake_vs_Y = scores_fake_vs_X, scores_fake_vs_Y
+
+    elif handle_labels == "filter_centers":
+        # FC: pooled radii/bandwidths/neighbourhoods, centers masked by label.
+        real_vs_X, real_vs_Y = SCORES_FC[clf](
+            Xr_test,
+            Yr_test,
+            Xr_train,
+            Yr_train,
+            Xg_train,
+            Yg_train,
+            k,
+        )
+        fake_vs_X, fake_vs_Y = SCORES_FC[clf](
+            Xg_test,
+            Yg_test,
+            Xr_train,
+            Yr_train,
+            Xg_train,
+            Yg_train,
+            k,
+        )
+
+    else:
+        raise ValueError(f"handle_labels={handle_labels!r} must be in {HANDLE_LABELS}.")
+
+    for y in range(Ny):
+        label_key = f"label-{y}"
+        logger.debug(f"--- {label_key} ({handle_labels}) ---")
+
+        Mr_test_y = Yr_test == y
+        Mg_test_y = Yg_test == y
+        Nr_y, Ng_y = int(np.sum(Mr_test_y)), int(np.sum(Mg_test_y))
+
+        if handle_labels == "filter_dataset":
+            # FD: the label-y dataset is a standalone unconditional problem,
+            # so k and the k+1-samples check are resolved on it.
+            Mr_train_y = Yr_train == y
+            Mg_train_y = Yg_train == y
+            k_y = resolve_k(nearest_k, int(np.sum(Yr == y)))
+
+            n_min = min(np.sum(Mr_train_y), np.sum(Mg_train_y))
+            if Nr_y == 0 or Ng_y == 0 or n_min < k_y + 1:
+                logger.debug(
+                    f"{label_key}: insufficient samples (real: {Nr_y}, fake: {Ng_y}, "
+                    f"need: {k_y + 1} to fit). Returning NaN curve."
+                )
+                d[label_key] = nan_pr_curve(n_lambdas, Nr_y, Ng_y, k_y, split)
+                continue
+
+            real_vs_X_y, real_vs_Y_y = SCORES[clf](
+                Xr_test[Mr_test_y],
+                Xr_train[Mr_train_y],
+                Xg_train[Mg_train_y],
+                k_y,
+            )
+            fake_vs_X_y, fake_vs_Y_y = SCORES[clf](
+                Xg_test[Mg_test_y],
+                Xr_train[Mr_train_y],
+                Xg_train[Mg_train_y],
+                k_y,
+            )
+        else:
+            # FP/FC: radii are pooled, so a label only needs probes to evaluate,
+            # not k+1 samples of its own (unlike `pr_curve.compute_pr_curve`'s 'rcf').
+            k_y = k
+            if Nr_y == 0 or Ng_y == 0:
+                logger.warning(
+                    f"{label_key}: no probes (real: {Nr_y}, fake: {Ng_y}). Returning NaN curve."
+                )
+                d[label_key] = nan_pr_curve(n_lambdas, Nr_y, Ng_y, k_y, split)
+                continue
+
+            real_vs_X_y, real_vs_Y_y = real_vs_X[Mr_test_y], real_vs_Y[Mr_test_y]
+            fake_vs_X_y, fake_vs_Y_y = fake_vs_X[Mg_test_y], fake_vs_Y[Mg_test_y]
+
+        alphas_y, betas_y = pr_curve_from_scores(
+            real_vs_X_y,
+            real_vs_Y_y,
+            fake_vs_X_y,
+            fake_vs_Y_y,
+            lambdas,
+        )
+
+        d[label_key] = {
+            "P": alphas_y,
+            "R": betas_y,
+            "n_real": Nr_y,
+            "n_fake": Ng_y,
+            "param_k": k_y,
+            "param_split": split,
+        }
 
     return d
 
