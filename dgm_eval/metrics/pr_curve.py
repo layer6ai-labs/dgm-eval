@@ -30,7 +30,16 @@ PR_CURVE_CLFS = ["cov", "ipr", "kde", "knn", "Cov", "iPR", "KDE", "kNN"]
 
 WORKING_MEMORY = 512
 
-HANDLE_LABELS = ["filter_dataset", "filter_probes", "filter_centers"]
+HANDLE_LABELS = [
+    "filter_dataset",
+    "filter_probes",
+    "filter_centers",
+]
+HANDLE_LABELS_ABBR = {
+    "filter_dataset": "FD",
+    "filter_probes": "FP",
+    "filter_centers": "FC",
+}
 
 
 ####################################################################################################
@@ -598,9 +607,9 @@ SCORES_FC = {
 }
 
 
-# --------------------------------------------------------------------------------
+####################################################################################################
 # PR CURVES
-# --------------------------------------------------------------------------------
+####################################################################################################
 
 
 def classification(score_vs_X: np.ndarray, score_vs_Y: np.ndarray, gamma: float):
@@ -690,9 +699,9 @@ def pr_curve(
     )
 
 
-# --------------------------------------------------------------------------------
-# Compute handle for PR curve computation, optionally with per-label breakdown
-# --------------------------------------------------------------------------------
+####################################################################################################
+# Compute PR curve
+####################################################################################################
 
 
 def nan_pr_curve(
@@ -710,170 +719,13 @@ def nan_pr_curve(
 
 
 def compute_pr_curve(
-    real_feats: np.ndarray,
-    fake_feats: np.ndarray,
-    clf: str,
-    nearest_k: int,
-    split: bool = False,
-    real_labs=None,
-    fake_labs=None,
-    derive_labelwise=False,
-    lambdas: np.ndarray | None = None,
-):
-    """
-    Compute PR curve.
-
-    ** Labels **
-    Optionally computes PR curves per-label.
-    Labels are assumed to be integers in [0, n_labels-1].
-    Ball computation is carried out once on pooled features,
-    then per-label scores are derived.
-
-    Uses the same risk-minimizing classification core as `pr_curve`, so results from
-    the two functions agree given the same inputs.
-
-    Args:
-        real_feats: Real features (N_real, D)
-        fake_feats: Fake features (N_fake, D)
-        lambdas: Lambda thresholds for risk computation
-        clf: Classifier name ('cov', 'ipr', 'kde', 'knn')
-        nearest_k: Number of neighbors. None or -1 sets k = sqrt(n_real)
-        real_labs: Real sample labels, shape (N_real,). Required if derive_labelwise=True
-        fake_labs: Fake sample labels, shape (N_fake,). Required if derive_labelwise=True
-        derive_labelwise: If True, compute basis once and derive per-label metrics
-        split: If True, use train/test halves of feats for fitting the classifier and evaluating
-
-    Returns:
-        dict with keys:
-            - 'P': overall precisions, length len(lambdas) + 2
-            - 'R': overall recalls, length len(lambdas) + 2
-            - 'label-i': per-label dict (if derive_labelwise=True)
-    """
-
-    ### Check inputs ###
-
-    if clf not in SCORES:
-        raise ValueError(f"Clf {clf} not supported. Choose from {list(SCORES.keys())}.")
-
-    if derive_labelwise and (real_labs is None or fake_labs is None):
-        raise ValueError("Arg `derive_labelwise` needs `real_labs` and `fake_labs`.")
-
-    if lambdas is None:
-        lambdas = LAMBDAS
-
-    ### Integrate inputs ###
-
-    Nr, Ng = int(real_feats.shape[0]), int(fake_feats.shape[0])
-    n_lambdas = len(lambdas)
-
-    if nearest_k is None:
-        nearest_k = int(np.sqrt(Nr))
-        logger.warning(f"k is None. Setting it to sqrt of num samples: {nearest_k}")
-    elif nearest_k == -1:
-        nearest_k = int(np.sqrt(Nr))
-        logger.info(f"k = -1. Setting it to sqrt of num samples: {nearest_k}")
-
-    if Nr < nearest_k + 1 or Ng < nearest_k + 1:
-        logger.warning(
-            f"Insufficient samples (real: {Nr}, fake: {Ng}, "
-            f"need: {nearest_k + 1}). Returning NaN curve."
-        )
-        return nan_pr_curve(n_lambdas, Nr, Ng, nearest_k, split)
-
-    if split:
-        Xr_train, Xr_test, Yr_train, Yr_test = strat_tts_optional_labs(
-            real_feats,
-            real_labs,
-        )
-        Xg_train, Xg_test, Yg_train, Yg_test = strat_tts_optional_labs(
-            fake_feats,
-            fake_labs,
-        )
-    else:
-        Xr_train, Xr_test = real_feats, real_feats
-        Yr_train, Yr_test = real_labs, real_labs
-        Xg_train, Xg_test = fake_feats, fake_feats
-        Yg_train, Yg_test = fake_labs, fake_labs
-
-    ### Compute metric ###
-
-    scores_real_vs_X, scores_real_vs_Y = SCORES[clf](
-        Xr_test,
-        Xr_train,
-        Xg_train,
-        nearest_k,
-    )
-    scores_fake_vs_X, scores_fake_vs_Y = SCORES[clf](
-        Xg_test,
-        Xr_train,
-        Xg_train,
-        nearest_k,
-    )
-    alphas, betas = pr_curve_from_scores(
-        scores_real_vs_X,
-        scores_real_vs_Y,
-        scores_fake_vs_X,
-        scores_fake_vs_Y,
-        lambdas,
-    )
-    d = {
-        "P": alphas,
-        "R": betas,
-        "n_real": Nr,
-        "n_fake": Ng,
-        "param_k": nearest_k,
-        "param_split": split,
-    }
-
-    if derive_labelwise:  # Filter probes per label and compute metric
-        n_labels = int(max(Yr_test.max(), Yg_test.max())) + 1
-
-        for y in range(n_labels):
-            label_key = f"label-{y}"
-            logger.info(f"--- {label_key} (rcf) ---")
-
-            Mr_y = Yr_test == y
-            Mg_y = Yg_test == y
-
-            Nr_y = int(np.sum(Mr_y))
-            Ng_y = int(np.sum(Mg_y))
-
-            if Nr_y < nearest_k + 1 or Ng_y < nearest_k + 1:
-                logger.warning(
-                    f"Insufficient samples (real: {Nr_y}, fake: {Ng_y}, "
-                    f"need: {nearest_k + 1}). Returning NaN curve."
-                )
-                d[label_key] = nan_pr_curve(n_lambdas, Nr_y, Ng_y, nearest_k, split)
-                continue
-
-            alphas_y, betas_y = pr_curve_from_scores(
-                scores_real_vs_X[Mr_y],
-                scores_real_vs_Y[Mr_y],
-                scores_fake_vs_X[Mg_y],
-                scores_fake_vs_Y[Mg_y],
-                lambdas,
-            )
-
-            d[label_key] = {
-                "P": alphas_y,
-                "R": betas_y,
-                "n_real": Nr_y,
-                "n_fake": Ng_y,
-                "param_k": nearest_k,
-                "param_split": split,
-            }
-
-    return d
-
-
-def compute_pr_curve_cond(
-    Xr,
-    Xg,
+    Xr: np.ndarray,
+    Xg: np.ndarray,
     Yr: np.ndarray = None,
     Yg: np.ndarray = None,
     clf: str = "ipr",
     nearest_k: int | None = None,
-    split: bool = True,
+    split: bool = False,
     handle_labels: str | None = None,
     lambdas: np.ndarray = None,
 ):
@@ -917,7 +769,6 @@ def compute_pr_curve_cond(
 
     Nr, Ng = int(Xr.shape[0]), int(Xg.shape[0])
     n_lambdas = len(lambdas)
-
     k = resolve_k(nearest_k, Nr)
 
     # Return NaN if insufficient samples: FP/FC keep pooled radii, so this is
@@ -1046,7 +897,7 @@ def compute_pr_curve_cond(
             )
         else:
             # FP/FC: radii are pooled, so a label only needs probes to evaluate,
-            # not k+1 samples of its own (unlike `pr_curve.compute_pr_curve`'s 'rcf').
+            # not k+1 samples of its own.
             k_y = k
             if Nr_y == 0 or Ng_y == 0:
                 logger.warning(

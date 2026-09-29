@@ -251,11 +251,12 @@ def compute_scores(
 
         logger.info(
             f"\n Computing PR curve with:\n"
-            f"\t classifier =  {args.pr_curve_clf}\n"
             f"\t samples = {reduced_n}\n"
+            f"\t classifier =  {args.pr_curve_clf}\n"
             f"\t k = {args.nearest_k}\n"
-            f"\t split = {args.split}\n"
-            + (f"\t label_method = {args.label_method}" if args.per_label else "")
+            f"\t split = {args.pr_curve_split}\n"
+            + (f"\t label_method = {args.label_method}\n" if args.per_label else "")
+            + (f"\t handle_labels = {args.pr_curve_hl}" if args.per_label else "")
         )
 
         rng = np.random.default_rng(seed)
@@ -267,11 +268,11 @@ def compute_scores(
             rg[inds1],
             clf=args.pr_curve_clf,
             nearest_k=args.nearest_k,
-            split=args.split,
+            split=args.pr_curve_split,
             **{
-                "derive_labelwise": True,
-                "real_labs": real_labs[inds0],
-                "fake_labs": fake_labs[inds1],
+                "Yr": real_labs[inds0],
+                "Yg": fake_labs[inds1],
+                "handle_labels": args.pr_curve_hl,  # filter_probes or filter_centers
             }
             if args.label_method == "rcf"
             else {},
@@ -282,12 +283,14 @@ def compute_scores(
                 label_key = f"label-{idx}"
                 logger.info(f"--- {label_key} (rfc) ---")
 
-                scores[f"pr_curve_{args.pr_curve_clf}"][label_key] = compute_pr_curve(
-                    rr[inds0][real_labs[inds0] == lab],
-                    rg[inds1][fake_labs[inds1] == lab],
-                    clf=args.pr_curve_clf,
-                    nearest_k=args.nearest_k,
-                    split=args.split,
+                scores[f"pr_curve_{args.pr_curve_clf}"][label_key] = (
+                    compute_pr_curve(
+                        rr[inds0][real_labs[inds0] == lab],
+                        rg[inds1][fake_labs[inds1] == lab],
+                        clf=args.pr_curve_clf,
+                        nearest_k=args.nearest_k,
+                        split=args.pr_curve_split,
+                    )
                 )
 
     if "sw_approx" in args.metrics and label_key == "overall":

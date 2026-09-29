@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import logging
 import os
 import sys
@@ -6,7 +8,7 @@ from pprint import pformat
 import click
 
 from dgm_eval.metrics import METRICS
-from dgm_eval.metrics.pr_curve import PR_CURVE_CLFS
+from dgm_eval.metrics.pr_curve import HANDLE_LABELS, PR_CURVE_CLFS
 from dgm_eval.utils import make_description_dic, make_str
 
 from .dataloaders import get_datamodule_from_path
@@ -40,6 +42,13 @@ LABEL_METHODS_DIC = {
     "rcf": "reduce-compute-filter",  # loop in `compute_{metric}`
 }
 LABEL_METHODS = list(LABEL_METHODS_DIC.keys())
+
+PR_CURVE_HL_PER_METHOD = {
+    "frc": ["filter_dataset"],
+    "rfc": ["filter_dataset"],
+    "rcf": ["filter_centers", "filter_probes"],
+}
+
 """
 frc: filter-reduce-compute 
     For each label:
@@ -137,6 +146,8 @@ def get_inception_scores(args, device, num_workers):
 @click.option("--nearest-k",            type=int,   default=None,                               help="Number of neighbours for PRDC. If None, set to sqrt of number of samples used for calculation.")  # fmt: skip
 @click.option("--reduced-n",            type=int,   default=10_000,                             help="Number of samples used for train, baseline, test, and generated sets for FLS")  # fmt: skip
 @click.option("--pr-curve-clf",         type=click.Choice(PR_CURVE_CLFS), default="knn",        help="Classifier for PR curve")  # fmt: skip
+@click.option("--pr-curve-split",       is_flag=True, default=False,                            help="Use train/test halves for fitting the PR curve classifier and evaluating")  # fmt: skip
+@click.option("--pr-curve-hl",          type=click.Choice(HANDLE_LABELS), default=None,         help="PR curve label handling. filter_dataset with frc/rfc, filter_probes or filter_centers with rcf. Defaults to filter_dataset / filter_probes. Only if --per-label is set.")  # fmt: skip
 # Heatmaps
 @click.option("--heatmaps",             is_flag=True, default=False,                            help="Generate heatmaps showing the fd focus on images.")  # fmt: skip
 @click.option("--heatmaps-perturbation",is_flag=True, default=False,                            help="Add some perturbation to the images on which gradcam is applied.")  # fmt: skip
@@ -179,6 +190,8 @@ def main(
     nearest_k,
     reduced_n,
     pr_curve_clf,
+    pr_curve_split,
+    pr_curve_hl,
     # Heatmaps
     heatmaps,
     heatmaps_perturbation,
@@ -228,6 +241,8 @@ def main(
     args.nearest_k = nearest_k
     args.reduced_n = reduced_n
     args.pr_curve_clf = pr_curve_clf
+    args.pr_curve_split = pr_curve_split
+    args.pr_curve_hl = pr_curve_hl
     # Heatmaps
     args.heatmaps = heatmaps
     args.heatmaps_perturbation = heatmaps_perturbation
@@ -255,6 +270,18 @@ def main(
         logger.info("[DRY RUN] - START")
     if args.encoding_run:
         logger.info("[ENCODING RUN] - START")
+
+    if args.per_label and "pr_curve" in args.metrics:
+        allowed_vals = PR_CURVE_HL_PER_METHOD[args.label_method]
+        if args.pr_curve_hl is None:
+            args.pr_curve_hl = allowed_vals[0]
+        elif args.pr_curve_hl not in allowed_vals:
+            raise ValueError(
+                f"--pr-curve-hl {args.pr_curve_hl} incompatible with "
+                f"--label-method {args.label_method}. Choose from {allowed_vals}."
+            )
+    else:
+        args.pr_curve_hl = None
 
     if args.xp is not None:
         args.output_dir = os.path.join(args.output_dir, args.xp)
@@ -298,6 +325,8 @@ def run(args):
         )
         + (
             f"\t pr_curve_clf: {args.pr_curve_clf}\n"
+            f"\t pr_curve_split: {args.pr_curve_split}\n"
+            f"\t pr_curve_hl: {args.pr_curve_hl}\n"
             if set(args.metrics) & {"pr_curve"}
             else ""
         )

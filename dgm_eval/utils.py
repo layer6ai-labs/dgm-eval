@@ -46,6 +46,15 @@ def make_description_dic(args, real_dm, gen_dataset_names):
     if set(args.metrics) & {"prdc", "pr_curve"}:
         desc["k"] = args.nearest_k
 
+    if set(args.metrics) & {"pr_curve"}:
+        # avoid circular import
+        from dgm_eval.metrics.pr_curve import HANDLE_LABELS_ABBR
+
+        if getattr(args, "pr_curve_split", False):
+            desc["split"] = ""
+        if getattr(args, "pr_curve_hl", None) is not None:
+            desc["hl"] = HANDLE_LABELS_ABBR[args.pr_curve_hl]
+
     if args.random_labels:
         desc["random_labs"] = ""
 
