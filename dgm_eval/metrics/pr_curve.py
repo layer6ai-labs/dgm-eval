@@ -33,6 +33,17 @@ PR_CURVE_CLFS = ["cov", "ipr", "kde", "knn", "Cov", "iPR", "KDE", "kNN"]
 # UTILS
 # --------------------------------------------------------------------------------
 
+
+def resolve_k(k, n):
+    if k is None:
+        k = int(np.sqrt(n))
+        logger.debug(f"k undefined. Setting it to sqrt of num samples: {k}")
+    elif k == -1:
+        k = int(np.sqrt(n))
+        logger.debug(f"k = -1. Setting it to sqrt of num samples: {k}")
+    return k
+
+
 WORKING_MEMORY = 512
 
 
@@ -62,31 +73,30 @@ def kth_nn_radius(
     return out
 
 
-def count_points_in_ball(
-    query: np.ndarray,
-    center: np.ndarray,
-    radius: np.ndarray | float,
+def count_points_in_probe_ball(
+    points: np.ndarray,
+    probes: np.ndarray,
+    radii: np.ndarray | float,
     working_memory: int = WORKING_MEMORY,
 ) -> np.ndarray:
 
-    # scalar -> one radius per center, read-only view, no copy
-    radius = np.broadcast_to(np.asarray(radius, dtype=np.float64), (center.shape[0],))
+    radii = np.broadcast_to(np.asarray(radii, dtype=np.float64), (probes.shape[0],))
 
-    out = np.zeros(center.shape[0], dtype=np.float64)
+    out = np.zeros(probes.shape[0], dtype=np.float64)
     offset = 0
     for chunk in pairwise_distances_chunked(
-        center,
-        query,
+        probes,
+        points,
         working_memory=working_memory,
     ):
-        r = radius[offset : offset + chunk.shape[0], None]
+        r = radii[offset : offset + chunk.shape[0], None]
         out[offset : offset + chunk.shape[0]] = (chunk <= r).sum(axis=1)
         offset += chunk.shape[0]
     return out
 
 
-def count_balls_containing(
-    query: np.ndarray,
+def count_balls_containing_probe(
+    probes: np.ndarray,
     centers: np.ndarray,
     radii: np.ndarray,
     working_memory: int = WORKING_MEMORY,
@@ -94,10 +104,10 @@ def count_balls_containing(
 
     assert centers.shape[0] == radii.shape[0]
 
-    out = np.zeros(query.shape[0], dtype=np.float64)
+    out = np.zeros(probes.shape[0], dtype=np.float64)
     offset = 0
     for chunk in pairwise_distances_chunked(
-        query,
+        probes,
         centers,
         working_memory=working_memory,
     ):
@@ -215,8 +225,8 @@ def cov_score(
         exclude_self=allow_exclusion and np.array_equal(z, Y),
     )
 
-    n_X_in_Y_ball = count_points_in_ball(X, z, z_to_Y_knn_radii)
-    n_Y_in_X_ball = count_points_in_ball(Y, z, z_to_X_knn_radii)
+    n_X_in_Y_ball = count_points_in_probe_ball(X, z, z_to_Y_knn_radii)
+    n_Y_in_X_ball = count_points_in_probe_ball(Y, z, z_to_X_knn_radii)
 
     return n_X_in_Y_ball, n_Y_in_X_ball
 
@@ -236,8 +246,8 @@ def ipr_score(
     X_to_X_knn_radii = kth_nn_radius(X, X, k, exclude_self=allow_exclusion)
     Y_to_Y_knn_radii = kth_nn_radius(Y, Y, k, exclude_self=allow_exclusion)
 
-    p_hat = count_balls_containing(z, X, X_to_X_knn_radii)
-    q_hat = count_balls_containing(z, Y, Y_to_Y_knn_radii)
+    p_hat = count_balls_containing_probe(z, X, X_to_X_knn_radii)
+    q_hat = count_balls_containing_probe(z, Y, Y_to_Y_knn_radii)
 
     return p_hat, q_hat
 
@@ -252,8 +262,8 @@ def kde_score(z, X, Y, k):
     bandwidth_X = np.mean(X_to_X_knn_radii)
     bandwidth_Y = np.mean(Y_to_Y_knn_radii)
 
-    p_hat = count_points_in_ball(X, z, bandwidth_X)
-    q_hat = count_points_in_ball(Y, z, bandwidth_Y)
+    p_hat = count_points_in_probe_ball(X, z, bandwidth_X)
+    q_hat = count_points_in_probe_ball(Y, z, bandwidth_Y)
 
     return p_hat, q_hat
 
@@ -486,7 +496,6 @@ SCORE = {
     "cov": cov_score,
     "ipr": ipr_score,
     "kde": kde_score,
-    "parzen": kde_score,
     "knn": knn_score,
     "Cov": cov_score,
     "iPR": ipr_score,
@@ -633,7 +642,7 @@ def compute_pr_curve(
         real_feats: Real features (N_real, D)
         fake_feats: Fake features (N_fake, D)
         lambdas: Lambda thresholds for risk computation
-        clf: Classifier name ('cov', 'ipr', 'knn', 'parzen')
+        clf: Classifier name ('cov', 'ipr', 'kde', 'knn')
         nearest_k: Number of neighbors. None or -1 sets k = sqrt(n_real)
         real_labs: Real sample labels, shape (N_real,). Required if derive_labelwise=True
         fake_labs: Fake sample labels, shape (N_fake,). Required if derive_labelwise=True
@@ -647,30 +656,35 @@ def compute_pr_curve(
             - 'label-i': per-label dict (if derive_labelwise=True)
     """
 
-    if lambdas is None:
-        lambdas = LAMBDAS
+    ### Check inputs ###
 
-    n_real, n_fake = int(real_feats.shape[0]), int(fake_feats.shape[0])
-    n_lambdas = len(lambdas)
+    if clf not in SCORE:
+        raise ValueError(f"Clf {clf} not supported. Choose from {list(SCORE.keys())}.")
 
-    # Checks
     if derive_labelwise and (real_labs is None or fake_labs is None):
         raise ValueError("Arg `derive_labelwise` needs `real_labs` and `fake_labs`.")
 
+    if lambdas is None:
+        lambdas = LAMBDAS
+
+    ### Integrate inputs ###
+
+    Nr, Ng = int(real_feats.shape[0]), int(fake_feats.shape[0])
+    n_lambdas = len(lambdas)
+
     if nearest_k is None:
-        nearest_k = int(np.sqrt(n_real))
+        nearest_k = int(np.sqrt(Nr))
         logger.warning(f"k is None. Setting it to sqrt of num samples: {nearest_k}")
     elif nearest_k == -1:
-        nearest_k = int(np.sqrt(n_real))
+        nearest_k = int(np.sqrt(Nr))
         logger.info(f"k = -1. Setting it to sqrt of num samples: {nearest_k}")
 
-    # Return NaN if insufficient samples
-    if n_real < nearest_k + 1 or n_fake < nearest_k + 1:
+    if Nr < nearest_k + 1 or Ng < nearest_k + 1:
         logger.warning(
-            f"Insufficient samples (real: {n_real}, fake: {n_fake}, "
+            f"Insufficient samples (real: {Nr}, fake: {Ng}, "
             f"need: {nearest_k + 1}). Returning NaN curve."
         )
-        return nan_pr_curve(n_lambdas, n_real, n_fake, nearest_k, split)
+        return nan_pr_curve(n_lambdas, Nr, Ng, nearest_k, split)
 
     if split:
         Xr_train, Xr_test, Yr_train, Yr_test = strat_tts_optional_labs(
@@ -687,69 +701,70 @@ def compute_pr_curve(
         Xg_train, Xg_test = fake_feats, fake_feats
         Yg_train, Yg_test = fake_labs, fake_labs
 
-    scores_real_vs_X, scores_real_vs_Y = SCORE[clf](
-        Xr_test, Xr_train, Xg_train, nearest_k
-    )  # (N_real,)
-    scores_fake_vs_X, scores_fake_vs_Y = SCORE[clf](
-        Xg_test, Xr_train, Xg_train, nearest_k
-    )  # (N_fake,)
+    ### Compute metric ###
 
-    precisions, recalls = pr_curve_from_scores(
+    scores_real_vs_X, scores_real_vs_Y = SCORE[clf](
+        Xr_test,
+        Xr_train,
+        Xg_train,
+        nearest_k,
+    )
+    scores_fake_vs_X, scores_fake_vs_Y = SCORE[clf](
+        Xg_test,
+        Xr_train,
+        Xg_train,
+        nearest_k,
+    )
+    alphas, betas = pr_curve_from_scores(
         scores_real_vs_X,
         scores_real_vs_Y,
         scores_fake_vs_X,
         scores_fake_vs_Y,
         lambdas,
     )
-
     d = {
-        "P": precisions,
-        "R": recalls,
-        "n_real": n_real,
-        "n_fake": n_fake,
+        "P": alphas,
+        "R": betas,
+        "n_real": Nr,
+        "n_fake": Ng,
         "param_k": nearest_k,
         "param_split": split,
     }
 
-    if derive_labelwise:
-        n_labels = np.max([Yr_train, Yr_test, Yg_train, Yg_test]) + 1
+    if derive_labelwise:  # Filter probes per label and compute metric
+        n_labels = int(max(Yr_test.max(), Yg_test.max())) + 1
 
-        for label_idx in range(n_labels):
-            label_key = f"label-{label_idx}"
+        for y in range(n_labels):
+            label_key = f"label-{y}"
             logger.info(f"--- {label_key} (rcf) ---")
 
-            # Masks
-            Mr_k = Yr_test == label_idx
-            Mg_k = Yg_test == label_idx
-            Xr_test_k = Xr_test[Mr_k]
-            Xg_test_k = Xg_test[Mg_k]
+            Mr_y = Yr_test == y
+            Mg_y = Yg_test == y
 
-            # Number of real/fake
-            Nr_k = np.sum(Mr_k)
-            Ng_k = np.sum(Mg_k)
+            Nr_y = int(np.sum(Mr_y))
+            Ng_y = int(np.sum(Mg_y))
 
-            # Return NaN if insufficient samples for this label
-            if np.sum(Nr_k) < nearest_k + 1 or np.sum(Ng_k) < nearest_k + 1:
+            if Nr_y < nearest_k + 1 or Ng_y < nearest_k + 1:
                 logger.warning(
-                    f"Insufficient samples (real: {Nr_k}, fake: {Ng_k}, "
+                    f"Insufficient samples (real: {Nr_y}, fake: {Ng_y}, "
                     f"need: {nearest_k + 1}). Returning NaN curve."
                 )
-                d[label_key] = nan_pr_curve(n_lambdas, Nr_k, Ng_k, nearest_k, split)
+                d[label_key] = nan_pr_curve(n_lambdas, Nr_y, Ng_y, nearest_k, split)
                 continue
 
-            alphas_k, betas_k = pr_curve_from_scores(
-                scores_real_vs_X[Mr_k],
-                scores_real_vs_Y[Mr_k],
-                scores_fake_vs_X[Mg_k],
-                scores_fake_vs_Y[Mg_k],
+            alphas_y, betas_y = pr_curve_from_scores(
+                scores_real_vs_X[Mr_y],
+                scores_real_vs_Y[Mr_y],
+                scores_fake_vs_X[Mg_y],
+                scores_fake_vs_Y[Mg_y],
                 lambdas,
             )
 
             d[label_key] = {
-                "P": alphas_k,
-                "R": betas_k,
-                "n_real": Nr_k,
-                "n_fake": Ng_k,
+                "P": alphas_y,
+                "R": betas_y,
+                "n_real": Nr_y,
+                "n_fake": Ng_y,
                 "param_k": nearest_k,
                 "param_split": split,
             }
